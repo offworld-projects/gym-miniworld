@@ -392,6 +392,7 @@ class Room:
         Render the static elements of the room
         """
 
+        glEnable(GL_TEXTURE_2D)
         glColor3f(1, 1, 1)
 
         # Draw the floor
@@ -505,7 +506,7 @@ class MiniWorldEnv(gym.Env):
         self.vis_fb = FrameBuffer(window_width, window_height, 16)
 
         # Compute the observation display size
-        self.obs_disp_width = 256
+        self.obs_disp_width = 64
         self.obs_disp_height = obs_height * (self.obs_disp_width / obs_width)
 
         # For displaying text
@@ -548,7 +549,6 @@ class MiniWorldEnv(gym.Env):
         self.rooms = []
 
         # Wall segments for collision detection
-        # Shape is (N, 2, 3)
         self.wall_segs = []
 
         # Generate the world
@@ -605,16 +605,12 @@ class MiniWorldEnv(gym.Env):
 
         return pos
 
-    def move_agent(self, fwd_dist, fwd_drift):
+    def move_agent(self, fwd_dist):
         """
         Move the agent forward
         """
 
-        next_pos = (
-            self.agent.pos +
-            self.agent.dir_vec * fwd_dist +
-            self.agent.right_vec * fwd_drift
-        )
+        next_pos = self.agent.pos + self.agent.dir_vec * fwd_dist
 
         if self.intersect(self.agent, next_pos, self.agent.radius):
             return False
@@ -662,16 +658,16 @@ class MiniWorldEnv(gym.Env):
 
         self.step_count += 1
 
-        rand = self.rand if self.domain_rand else None
+        # rand = self.rand if self.domain_rand else None
+        rand = self.rand
         fwd_step = self.params.sample(rand, 'forward_step')
-        fwd_drift = self.params.sample(rand, 'forward_drift')
         turn_step = self.params.sample(rand, 'turn_step')
 
         if action == self.actions.move_forward:
-            self.move_agent(fwd_step, fwd_drift)
+            self.move_agent(fwd_step)
 
         elif action == self.actions.move_back:
-            self.move_agent(-fwd_step, fwd_drift)
+            self.move_agent(-fwd_step)
 
         elif action == self.actions.turn_left:
             self.turn_agent(turn_step)
@@ -863,10 +859,10 @@ class MiniWorldEnv(gym.Env):
 
         # If an exact position if specified
         if pos is not None:
-            ent.dir = dir if dir != None else self.rand.float(-math.pi, math.pi)
+            ent.dir = dir if dir else self.rand.float(-math.pi, math.pi)
             ent.pos = pos
             self.entities.append(ent)
-            return ent
+            return
 
         # Keep retrying until we find a suitable position
         while True:
@@ -892,7 +888,7 @@ class MiniWorldEnv(gym.Env):
                 continue
 
             # Pick a direction
-            d = dir if dir != None else self.rand.float(-math.pi, math.pi)
+            d = dir if dir else self.rand.float(-math.pi, math.pi)
 
             ent.pos = pos
             ent.dir = d
@@ -1041,7 +1037,6 @@ class MiniWorldEnv(gym.Env):
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
 
         # Render the rooms
-        glEnable(GL_TEXTURE_2D)
         for room in self.rooms:
             room._render()
 
@@ -1075,10 +1070,8 @@ class MiniWorldEnv(gym.Env):
         if render_agent:
             self.agent.render()
 
-        # Resolve the rendered image into a numpy array
-        img = frame_buffer.resolve()
-
-        return img
+        # Resolve the rendered imahe into a numpy array
+        return frame_buffer.resolve()
 
     def render_top_view(self, frame_buffer=None):
         """
@@ -1200,116 +1193,6 @@ class MiniWorldEnv(gym.Env):
             render_agent=False
         )
 
-    def render_depth(self, frame_buffer=None):
-        """
-        Produce a depth map
-        Values are floating-point, map shape is (H,W,1)
-        Distances are in meters from the observer
-        """
-
-        if frame_buffer == None:
-            frame_buffer = self.obs_fb
-
-        # Render the world
-        self.render_obs(frame_buffer)
-
-        return frame_buffer.get_depth_map(0.04, 100.0)
-
-    def get_visible_ents(self):
-        """
-        Get a list of visible entities.
-        Uses OpenGL occlusion queries to approximate visibility.
-        :return: set of objects visible to the agent
-        """
-
-        # Allocate the occlusion query ids
-        num_ents = len(self.entities)
-        query_ids = (GLuint * num_ents)()
-        glGenQueries(num_ents, query_ids)
-
-        # Switch to the default OpenGL context
-        # This is necessary on Linux Nvidia drivers
-        self.shadow_window.switch_to()
-
-        # Use the small observation frame buffer
-        frame_buffer = self.obs_fb
-
-        # Bind the frame buffer before rendering into it
-        frame_buffer.bind()
-
-        # Clear the color and depth buffers
-        glClearColor(*self.sky_color, 1.0)
-        glClearDepth(1.0)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-        # Set the projection matrix
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(
-            self.agent.cam_fov_y,
-            frame_buffer.width / float(frame_buffer.height),
-            0.04,
-            100.0
-        )
-
-        # Setup the cameravisible objects
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        gluLookAt(
-            # Eye position
-            *self.agent.cam_pos,
-            # Target
-            *(self.agent.cam_pos + self.agent.cam_dir),
-            # Up vector
-            0, 1.0, 0.0
-        )
-
-        # Render the rooms, without texturing
-        glDisable(GL_TEXTURE_2D)
-        for room in self.rooms:
-            room._render()
-
-        # For each entity
-        for ent_idx, ent in enumerate(self.entities):
-            if ent is self.agent:
-                continue
-
-            glBeginQuery(GL_ANY_SAMPLES_PASSED, query_ids[ent_idx])
-            pos = ent.pos
-
-            #glColor3f(1, 0, 0)
-            drawBox(
-                x_min=pos[0] - 0.1,
-                x_max=pos[0] + 0.1,
-                y_min=pos[1],
-                y_max=pos[1] + 0.2,
-                z_min=pos[2] - 0.1,
-                z_max=pos[2] + 0.1
-            )
-
-            glEndQuery(GL_ANY_SAMPLES_PASSED)
-
-        vis_objs = set()
-
-        # Get query results
-        for ent_idx, ent in enumerate(self.entities):
-            if ent is self.agent:
-                continue
-
-            visible = (GLuint*1)(1)
-            glGetQueryObjectuiv(query_ids[ent_idx], GL_QUERY_RESULT, visible);
-
-            if visible[0] != 0:
-                vis_objs.add(ent)
-
-        # Free the occlusion query ids
-        glDeleteQueries(1, query_ids)
-
-        #img = frame_buffer.resolve()
-        #return img
-
-        return vis_objs
-
     def render(self, mode='human', close=False):
         """
         Render the environment for human viewing
@@ -1399,10 +1282,12 @@ class MiniWorldEnv(gym.Env):
         )
 
         # Draw the text label in the window
-        self.text_label.text = "pos: (%.2f, %.2f, %.2f)\nangle: %d\nsteps: %d" % (
+        self.text_label.text = "pos: (%.2f, %.2f, %.2f)\nangle: %d\nsteps: %d\n vel: %.3f rot %.3f" % (
             *self.agent.pos,
             int(self.agent.dir * 180 / math.pi) % 360,
-            self.step_count
+            self.step_count,
+            self.last_action[0],
+            self.last_action[1],
         )
         self.text_label.draw()
 

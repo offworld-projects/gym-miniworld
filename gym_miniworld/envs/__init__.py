@@ -15,6 +15,8 @@ from .putnext import *
 from .maze import *
 from .collecthealth import *
 from .simtorealgoto import *
+from .simtoreal1 import *
+from .simtoreal2 import *
 from .simtorealpush import *
 
 # Registered environment ids
